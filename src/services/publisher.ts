@@ -1,8 +1,8 @@
-import { loadEnv } from "../config/env.ts";
+import { loadEnv } from "../config/env";
 import type {
   PlatformName,
-  PlatformSelection,
   PlatformResult,
+  PlatformSelection,
   PublishError,
   PublishInput,
   PublishOptions,
@@ -15,29 +15,36 @@ import type {
   UploadPostStatusResponse,
   UploadPostSyncResponse,
   ValidatedPublishInput,
-} from "../domain/types.ts";
+} from "../domain/types";
+import { classifyUploadPostFailure } from "../domain/error-classification";
 import {
   resolvePlatformSelection,
   selectedPlatformsFromSelection,
   validatePublishInput,
   ValidationError,
-} from "../domain/validation.ts";
-import { UploadPostApiError, UploadPostClient, UploadPostPollingError } from "../lib/upload-post/client.ts";
+} from "../domain/validation";
+import {
+  UploadPostApiError,
+  UploadPostClient,
+  UploadPostPollingError,
+} from "../lib/upload-post/client";
 import {
   getStatus as getUploadStatus,
   uploadPhotos,
   uploadText,
   uploadVideo,
-} from "../lib/upload-post/endpoints.ts";
-
-export interface PublisherDependencies {
-  client: UploadPostClient;
-  profile: string;
-  pollIntervalMs: number;
-  pollTimeoutMs: number;
-}
+} from "../lib/upload-post/endpoints";
 
 type ProgressReporter = ((event: PublishProgressEvent) => void) | undefined;
+
+export interface PublisherDependencies {
+  apiKey: string;
+  profile: string;
+  baseUrl?: string;
+  pollIntervalMs?: number;
+  pollTimeoutMs?: number;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+}
 
 function createPlatformResult(status: PlatformResult["status"]): PlatformResult {
   return { status };
@@ -50,22 +57,13 @@ function createBaseResult(requestedPlatforms: PlatformName[]): PublishResult {
     platforms: {
       x: requestedPlatforms.includes("x")
         ? createPlatformResult("pending")
-        : {
-            status: "skipped",
-            reason: "not_requested",
-          },
+        : { status: "skipped", reason: "not_requested" },
       instagram: requestedPlatforms.includes("instagram")
         ? createPlatformResult("pending")
-        : {
-            status: "skipped",
-            reason: "not_requested",
-          },
+        : { status: "skipped", reason: "not_requested" },
       facebook: requestedPlatforms.includes("facebook")
         ? createPlatformResult("pending")
-        : {
-            status: "skipped",
-            reason: "not_requested",
-          },
+        : { status: "skipped", reason: "not_requested" },
     },
   };
 }
@@ -89,11 +87,13 @@ function emitProgress(
   stage: string,
   message: string,
   details?: unknown,
+  requestId?: string,
 ): void {
   onProgress?.({
     stage,
     message,
     details,
+    requestId,
   });
 }
 
@@ -102,6 +102,8 @@ function toPublishError(error: unknown): PublishError {
     return {
       code: "validation_error",
       message: error.message,
+      retryable: false,
+      suggestion: "Adjust the payload or platform selection and try again.",
     };
   }
 
@@ -109,63 +111,39 @@ function toPublishError(error: unknown): PublishError {
     return {
       code: "publish_timeout",
       message: error.message,
+      retryable: true,
+      suggestion:
+        "Keep polling with getPublishStatus(requestId) or retry later if Upload Post is still processing the job.",
       details: error.lastResponse,
     };
   }
 
   if (error instanceof UploadPostApiError) {
     const body = error.body as Record<string, unknown> | undefined;
-    const message =
-      (body &&
-        typeof body.message === "string" &&
-        body.message) ||
-      error.message;
-
-    if (error.status === 401) {
-      return {
-        code: "authentication_error",
-        message,
-        details: body,
-      };
-    }
-
-    if (error.status === 404) {
-      return {
-        code: "profile_not_found",
-        message,
-        details: body,
-      };
-    }
-
-    if (error.status === 429) {
-      const code =
-        message.toLowerCase().includes("monthly limit")
-          ? "monthly_limit_exceeded"
-          : "rate_limited";
-      return {
-        code,
-        message,
-        details: body,
-      };
-    }
-
-    return {
-      code: "api_error",
-      message,
+    return classifyUploadPostFailure({
       details: body ?? { status: error.status, url: error.url },
-    };
+      fallbackCode: "api_error",
+      httpStatus: error.status,
+      message:
+        (body && typeof body.message === "string" && body.message) ||
+        (body && typeof body.error === "string" && body.error) ||
+        error.message,
+    });
   }
 
   if (error instanceof Error) {
     return {
       code: "network_error",
       message: error.message,
+      retryable: true,
+      suggestion: "Check network connectivity and retry the request.",
     };
   }
 
   return {
     code: "unexpected_response",
     message: "An unexpected error occurred.",
+    retryable: false,
     details: error,
   };
 }
@@ -203,6 +181,7 @@ function inferOverallStatus(result: PublishResult): PublishResultStatus {
 
 function normalizePlatformResponse(
   response: UploadPostPlatformResponse | UploadPostStatusEntry | undefined,
+  platform: PlatformName,
   topLevelStatus?: UploadPostStatusResponse["status"],
 ): PlatformResult {
   if (!response) {
@@ -221,17 +200,22 @@ function normalizePlatformResponse(
     };
   }
 
-  if (response.success === false) {
+  if (
+    response.success === false ||
+    typeof response.error === "string" ||
+    (topLevelStatus === "completed" && typeof response.message === "string")
+  ) {
     return {
       status: "failed",
-      error: {
-        code: "platform_publish_failed",
+      error: classifyUploadPostFailure({
+        details: response,
+        fallbackCode: "platform_publish_failed",
         message:
           (typeof response.error === "string" && response.error) ||
           (typeof response.message === "string" && response.message) ||
           "Platform publish failed.",
-        details: response,
-      },
+        platform,
+      }),
       raw: response,
     };
   }
@@ -252,16 +236,11 @@ function normalizeSyncResponse(
   result.raw = response;
   applySkippedPlatforms(result, validatedInput.skippedPlatforms);
 
-  if (validatedInput.publishablePlatforms.includes("x")) {
-    result.platforms.x = normalizePlatformResponse(response.results?.x);
-  }
-
-  if (validatedInput.publishablePlatforms.includes("instagram")) {
-    result.platforms.instagram = normalizePlatformResponse(response.results?.instagram);
-  }
-
-  if (validatedInput.publishablePlatforms.includes("facebook")) {
-    result.platforms.facebook = normalizePlatformResponse(response.results?.facebook);
+  for (const platform of validatedInput.publishablePlatforms) {
+    result.platforms[platform] = normalizePlatformResponse(
+      response.results?.[platform],
+      platform,
+    );
   }
 
   result.overallStatus = inferOverallStatus(result);
@@ -291,23 +270,10 @@ function normalizeStatusResponse(
     }
   }
 
-  if (publishablePlatforms.includes("x")) {
-    result.platforms.x = normalizePlatformResponse(
-      statusEntries.get("x"),
-      response.status,
-    );
-  }
-
-  if (publishablePlatforms.includes("instagram")) {
-    result.platforms.instagram = normalizePlatformResponse(
-      statusEntries.get("instagram"),
-      response.status,
-    );
-  }
-
-  if (publishablePlatforms.includes("facebook")) {
-    result.platforms.facebook = normalizePlatformResponse(
-      statusEntries.get("facebook"),
+  for (const platform of publishablePlatforms) {
+    result.platforms[platform] = normalizePlatformResponse(
+      statusEntries.get(platform),
+      platform,
       response.status,
     );
   }
@@ -336,12 +302,21 @@ function isSyncResponse(response: unknown): response is UploadPostSyncResponse {
   );
 }
 
+function createClient(dependencies: PublisherDependencies): UploadPostClient {
+  return new UploadPostClient({
+    apiKey: dependencies.apiKey,
+    baseUrl: dependencies.baseUrl ?? "https://api.upload-post.com/api",
+    fetchImpl: dependencies.fetchImpl,
+  });
+}
+
 async function executePublish(
   validatedInput: ValidatedPublishInput,
   dependencies: PublisherDependencies,
   onProgress?: ProgressReporter,
 ): Promise<PublishResult> {
-  const requestId = dependencies.client.generateRequestId();
+  const client = createClient(dependencies);
+  const requestId = client.generateRequestId();
   const xOverrides = validatedInput.platformOverrides?.x;
   const instagramOverrides = validatedInput.platformOverrides?.instagram;
   const facebookOverrides = validatedInput.platformOverrides?.facebook;
@@ -351,71 +326,101 @@ async function executePublish(
     "publish.prepared",
     `Prepared publish request ${requestId} for ${validatedInput.publishablePlatforms.join(", ")}.`,
     {
-      requestId,
       kind: validatedInput.kind,
       requestedPlatforms: validatedInput.requestedPlatforms,
       publishablePlatforms: validatedInput.publishablePlatforms,
     },
+    requestId,
   );
 
   let response: UploadPostSyncResponse | UploadPostAsyncResponse;
   if (validatedInput.kind === "text") {
-    emitProgress(onProgress, "publish.submitting", "Submitting text post to Upload Post.");
-    response = await uploadText(dependencies.client, {
-      user: dependencies.profile,
-      caption: validatedInput.caption,
+    emitProgress(
+      onProgress,
+      "publish.submitting",
+      "Submitting text post to Upload Post.",
+      undefined,
       requestId,
-      platforms: validatedInput.publishablePlatforms,
-      xTitle: xOverrides?.title,
-      xLongTextAsPost: xOverrides?.longTextAsPost,
-      facebookTitle: facebookOverrides?.title,
-      facebookPageId: facebookOverrides?.pageId,
-      facebookLinkUrl: facebookOverrides?.linkUrl,
-    }, onProgress);
+    );
+    response = await uploadText(
+      client,
+      {
+        user: dependencies.profile,
+        caption: validatedInput.caption,
+        requestId,
+        platforms: validatedInput.publishablePlatforms,
+        xTitle: xOverrides?.title,
+        xLongTextAsPost: xOverrides?.longTextAsPost,
+        facebookTitle: facebookOverrides?.title,
+        facebookPageId: facebookOverrides?.pageId,
+        facebookLinkUrl: facebookOverrides?.linkUrl,
+      },
+      onProgress,
+    );
   } else if (validatedInput.kind === "photos") {
-    emitProgress(onProgress, "publish.submitting", "Submitting photo post to Upload Post.");
-    response = await uploadPhotos(dependencies.client, {
-      user: dependencies.profile,
-      caption: validatedInput.caption,
-      media: validatedInput.media,
+    emitProgress(
+      onProgress,
+      "publish.submitting",
+      "Submitting photo post to Upload Post.",
+      undefined,
       requestId,
-      platforms: validatedInput.publishablePlatforms,
-      xTitle: xOverrides?.title,
-      instagramTitle: instagramOverrides?.title,
-      xLongTextAsPost: xOverrides?.longTextAsPost,
-      facebookTitle: facebookOverrides?.title,
-      facebookDescription: facebookOverrides?.description,
-      facebookPageId: facebookOverrides?.pageId,
-      facebookMediaType:
-        facebookOverrides?.mediaType === "STORIES" ? "STORIES" : "POSTS",
-    }, onProgress);
+    );
+    response = await uploadPhotos(
+      client,
+      {
+        user: dependencies.profile,
+        caption: validatedInput.caption,
+        media: validatedInput.media,
+        requestId,
+        platforms: validatedInput.publishablePlatforms,
+        xTitle: xOverrides?.title,
+        instagramTitle: instagramOverrides?.title,
+        xLongTextAsPost: xOverrides?.longTextAsPost,
+        facebookTitle: facebookOverrides?.title,
+        facebookDescription: facebookOverrides?.description,
+        facebookPageId: facebookOverrides?.pageId,
+        facebookMediaType:
+          facebookOverrides?.mediaType === "STORIES" ? "STORIES" : "POSTS",
+      },
+      onProgress,
+    );
   } else {
-    emitProgress(onProgress, "publish.submitting", "Submitting video post to Upload Post.");
-    response = await uploadVideo(dependencies.client, {
-      user: dependencies.profile,
-      caption: validatedInput.caption,
-      media: validatedInput.media[0]!,
+    emitProgress(
+      onProgress,
+      "publish.submitting",
+      "Submitting video post to Upload Post.",
+      undefined,
       requestId,
-      platforms: validatedInput.publishablePlatforms,
-      xTitle: xOverrides?.title,
-      instagramTitle: instagramOverrides?.title,
-      xLongTextAsPost: xOverrides?.longTextAsPost,
-      instagramMediaType:
-        instagramOverrides?.mediaType === "STORIES" ? "STORIES" : "REELS",
-      shareToFeed:
-        instagramOverrides?.shareToFeed ??
-        instagramOverrides?.mediaType !== "STORIES",
-      facebookTitle: facebookOverrides?.title,
-      facebookDescription: facebookOverrides?.description,
-      facebookPageId: facebookOverrides?.pageId,
-      facebookMediaType:
-        facebookOverrides?.mediaType === "STORIES" ||
-        facebookOverrides?.mediaType === "VIDEO"
-          ? facebookOverrides.mediaType
-          : "REELS",
-      facebookVideoState: facebookOverrides?.videoState,
-      facebookThumbnailUrl: facebookOverrides?.thumbnailUrl,
-    }, onProgress);
+    );
+    response = await uploadVideo(
+      client,
+      {
+        user: dependencies.profile,
+        caption: validatedInput.caption,
+        media: validatedInput.media[0]!,
+        requestId,
+        platforms: validatedInput.publishablePlatforms,
+        xTitle: xOverrides?.title,
+        instagramTitle: instagramOverrides?.title,
+        xLongTextAsPost: xOverrides?.longTextAsPost,
+        instagramMediaType:
+          instagramOverrides?.mediaType === "STORIES" ? "STORIES" : "REELS",
+        shareToFeed:
+          instagramOverrides?.shareToFeed ??
+          instagramOverrides?.mediaType !== "STORIES",
+        facebookTitle: facebookOverrides?.title,
+        facebookDescription: facebookOverrides?.description,
+        facebookPageId: facebookOverrides?.pageId,
+        facebookMediaType:
+          facebookOverrides?.mediaType === "STORIES" ||
+          facebookOverrides?.mediaType === "VIDEO"
+            ? facebookOverrides.mediaType
+            : "REELS",
+        facebookVideoState: facebookOverrides?.videoState,
+        facebookThumbnailUrl: facebookOverrides?.thumbnailUrl,
+      },
+      onProgress,
+    );
   }
 
   if (isSyncResponse(response)) {
@@ -424,6 +429,7 @@ async function executePublish(
       "publish.sync_completed",
       `Upload Post completed synchronously for request ${requestId}.`,
       response,
+      requestId,
     );
     return normalizeSyncResponse(response, validatedInput, requestId);
   }
@@ -434,11 +440,17 @@ async function executePublish(
       "publish.accepted",
       `Upload Post accepted request ${response.request_id ?? requestId} and is processing it asynchronously.`,
       response,
+      response.request_id,
     );
-    const finalStatus = await dependencies.client.pollStatus(response.request_id!, {
-      intervalMs: dependencies.pollIntervalMs,
-      timeoutMs: dependencies.pollTimeoutMs,
-    }, onProgress);
+
+    const finalStatus = await client.pollStatus(
+      response.request_id!,
+      {
+        intervalMs: dependencies.pollIntervalMs ?? 1_000,
+        timeoutMs: dependencies.pollTimeoutMs ?? 60_000,
+      },
+      onProgress,
+    );
 
     const result = normalizeStatusResponse(
       finalStatus,
@@ -451,11 +463,13 @@ async function executePublish(
       initial: response,
       final: finalStatus,
     };
+
     emitProgress(
       onProgress,
       "publish.completed",
       `Upload Post finished processing request ${response.request_id}.`,
       result,
+      response.request_id,
     );
     return result;
   }
@@ -534,7 +548,8 @@ export function createPublisherService(dependencies: PublisherDependencies) {
 
     async getPublishStatus(requestId: string): Promise<PublishResult> {
       try {
-        const response = await getUploadStatus(dependencies.client, requestId);
+        const client = createClient(dependencies);
+        const response = await getUploadStatus(client, requestId);
         const inferredPlatforms = new Set<PlatformName>();
         for (const entry of response.results ?? []) {
           if (
@@ -560,14 +575,10 @@ export function createPublisherService(dependencies: PublisherDependencies) {
 
 function createDefaultPublisherService() {
   const env = loadEnv();
-  const client = new UploadPostClient({
-    apiKey: env.apiKey,
-    baseUrl: env.baseUrl,
-  });
-
   return createPublisherService({
-    client,
+    apiKey: env.apiKey,
     profile: env.profile,
+    baseUrl: env.baseUrl,
     pollIntervalMs: env.pollIntervalMs,
     pollTimeoutMs: env.pollTimeoutMs,
   });

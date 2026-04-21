@@ -1,16 +1,60 @@
 {
-  "name": "social-media-posting",
-  "module": "index.ts",
+  "name": "@saranshkhulbe/upload-post-publisher",
+  "version": "0.1.0",
+  "description": "TypeScript package for publishing to X, Instagram, and Facebook through Upload Post.",
   "type": "module",
-  "scripts": {
-    "publish:script": "bun run src/scripts/publish.ts",
-    "publish": "bun run index.ts publish",
-    "status": "bun run index.ts status",
-    "check": "tsc --noEmit",
-    "test": "bun test"
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --out-dir dist",
+    "check": "tsc --noEmit",
+    "test": "bun test",
+    "pack:check": "npm --cache .npm-cache pack --dry-run",
+    "prepublishOnly": "npm run check && npm test && npm run build"
+  },
+  "keywords": [
+    "upload-post",
+    "social-media",
+    "publisher",
+    "x",
+    "instagram",
+    "facebook",
+    "typescript",
+    "api-client"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saranshkhulbe7/social-media-publishing.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saranshkhulbe7/social-media-publishing/issues"
+  },
+  "homepage": "https://github.com/saranshkhulbe7/social-media-publishing#readme",
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5.0.0"
+    "@types/node": "^24.10.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3"
   }
 }

@@ -10,14 +10,6 @@ export interface EnvConfig {
   pollTimeoutMs: number;
 }
 
-function getEnvSource(): Record<string, string | undefined> {
-  if (typeof Bun !== "undefined") {
-    return Bun.env;
-  }
-
-  return process.env;
-}
-
 function readRequiredString(
   source: Record<string, string | undefined>,
   key: string,
@@ -51,7 +43,7 @@ function readOptionalPositiveInt(
 }
 
 export function loadEnv(
-  source: Record<string, string | undefined> = getEnvSource(),
+  source: Record<string, string | undefined> = process.env,
 ): EnvConfig {
   return {
     apiKey: readRequiredString(source, "UPLOAD_POST_API_KEY"),

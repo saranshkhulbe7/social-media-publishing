@@ -1,4 +1,5 @@
-import { basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 
 import type {
   PlatformName,
@@ -6,11 +7,25 @@ import type {
   UploadPostAsyncResponse,
   UploadPostStatusResponse,
   UploadPostSyncResponse,
-} from "../../domain/types.ts";
-import { isUrl } from "../../domain/validation.ts";
-import { UploadPostClient } from "./client.ts";
+} from "../../domain/types";
+import { isUrl } from "../../domain/validation";
+import { UploadPostClient } from "./client";
 
 type ProgressReporter = ((event: PublishProgressEvent) => void) | undefined;
+
+const MIME_TYPES: Record<string, string> = {
+  ".gif": "image/gif",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".m4v": "video/x-m4v",
+  ".mov": "video/quicktime",
+  ".mp4": "video/mp4",
+  ".mpeg": "video/mpeg",
+  ".mpg": "video/mpeg",
+  ".png": "image/png",
+  ".webm": "video/webm",
+  ".webp": "image/webp",
+};
 
 export interface UploadTextRequest {
   user: string;
@@ -76,17 +91,21 @@ function appendPlatform(formData: FormData, platform: string): void {
   formData.append("platform[]", platform);
 }
 
-function appendMediaReference(
+async function appendMediaReference(
   formData: FormData,
   fieldName: string,
   reference: string,
-): void {
+): Promise<void> {
   if (isUrl(reference)) {
     formData.append(fieldName, reference);
     return;
   }
 
-  formData.append(fieldName, Bun.file(reference), basename(reference));
+  const buffer = await readFile(reference);
+  const fileName = basename(reference);
+  const type = MIME_TYPES[extname(reference).toLowerCase()] ?? "application/octet-stream";
+  const file = new File([buffer], fileName, { type });
+  formData.append(fieldName, file, fileName);
 }
 
 export async function uploadText(
@@ -133,12 +152,12 @@ export async function uploadPhotos(
   appendValue(formData, "instagram_title", request.instagramTitle);
   appendValue(formData, "x_long_text_as_post", request.xLongTextAsPost);
   appendValue(formData, "facebook_title", request.facebookTitle);
-  appendValue(formData, "facebook_description", request.facebookDescription);
+  appendValue(formData, "description", request.facebookDescription);
   appendValue(formData, "facebook_page_id", request.facebookPageId);
   appendValue(formData, "facebook_media_type", request.facebookMediaType);
 
   for (const reference of request.media) {
-    appendMediaReference(formData, "photos[]", reference);
+    await appendMediaReference(formData, "photos[]", reference);
   }
 
   return client.postMultipart(
@@ -173,7 +192,7 @@ export async function uploadVideo(
   appendValue(formData, "facebook_media_type", request.facebookMediaType);
   appendValue(formData, "video_state", request.facebookVideoState);
   appendValue(formData, "thumbnail_url", request.facebookThumbnailUrl);
-  appendMediaReference(formData, "video", request.media);
+  await appendMediaReference(formData, "video", request.media);
 
   return client.postMultipart(
     "/upload",

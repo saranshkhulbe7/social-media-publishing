@@ -1,13 +1,19 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { extname } from "node:path";
 
+import {
+  formatBytes,
+  LOCAL_PHOTO_FILE_SIZE_LIMITS_BYTES,
+  LOCAL_VIDEO_FILE_SIZE_LIMITS_BYTES,
+  PHOTO_COUNT_LIMITS,
+} from "./platform-rules";
 import type {
   MediaClassification,
   PlatformName,
   PlatformSelection,
   PublishInput,
   ValidatedPublishInput,
-} from "./types.ts";
+} from "./types";
 
 const IMAGE_EXTENSIONS = new Set([
   ".jpg",
@@ -77,9 +83,11 @@ function inferKindFromExtension(value: string): MediaClassification {
   if (IMAGE_EXTENSIONS.has(extension)) {
     return "image";
   }
+
   if (VIDEO_EXTENSIONS.has(extension)) {
     return "video";
   }
+
   return "unknown";
 }
 
@@ -89,24 +97,11 @@ export function classifyMediaReference(reference: string): MediaClassification {
     return inferKindFromExtension(parsed.pathname);
   }
 
-  const extensionKind = inferKindFromExtension(reference);
-  if (extensionKind !== "unknown") {
-    return extensionKind;
-  }
-
   if (!existsSync(reference)) {
     throw new ValidationError(`Local media file does not exist: ${reference}`);
   }
 
-  const fileType = Bun.file(reference).type;
-  if (fileType.startsWith("image/")) {
-    return "image";
-  }
-  if (fileType.startsWith("video/")) {
-    return "video";
-  }
-
-  return "unknown";
+  return inferKindFromExtension(reference);
 }
 
 function requireCaption(caption: string): string {
@@ -120,6 +115,105 @@ function requireCaption(caption: string): string {
 
 function normalizeMediaList(media: string | string[]): string[] {
   return Array.isArray(media) ? media : [media];
+}
+
+function isLocalReference(reference: string): boolean {
+  return !isUrl(reference);
+}
+
+function validatePhotoCountLimits(
+  media: string[],
+  selection: Required<PlatformSelection>,
+): void {
+  if (selection.x && media.length > (PHOTO_COUNT_LIMITS.x ?? Number.POSITIVE_INFINITY)) {
+    throw new ValidationError(
+      "X photo posts are limited to 4 images in this package. Upload Post can auto-split larger image sets into a thread, but this library keeps the cross-post flow predictable by requiring 4 or fewer images when x: true.",
+    );
+  }
+
+  if (
+    selection.instagram &&
+    media.length > (PHOTO_COUNT_LIMITS.instagram ?? Number.POSITIVE_INFINITY)
+  ) {
+    throw new ValidationError(
+      "Instagram carousel posts are limited to 10 media items. Reduce the number of photos or publish without instagram: true.",
+    );
+  }
+}
+
+function validateLocalPhotoFileSizes(
+  media: string[],
+  selection: Required<PlatformSelection>,
+): void {
+  for (const reference of media) {
+    if (!isLocalReference(reference)) {
+      continue;
+    }
+
+    const sizeBytes = statSync(reference).size;
+    validateLocalFileSizeForPlatform(reference, sizeBytes, selection, "x");
+    validateLocalFileSizeForPlatform(reference, sizeBytes, selection, "instagram");
+    validateLocalFileSizeForPlatform(reference, sizeBytes, selection, "facebook");
+  }
+}
+
+function validateLocalVideoFileSize(
+  media: string,
+  selection: Required<PlatformSelection>,
+  input: Extract<PublishInput, { kind: "video" }>,
+): void {
+  if (!isLocalReference(media)) {
+    return;
+  }
+
+  const sizeBytes = statSync(media).size;
+
+  if (
+    selection.instagram &&
+    sizeBytes > LOCAL_VIDEO_FILE_SIZE_LIMITS_BYTES.instagram
+  ) {
+    throw new ValidationError(
+      `Instagram local video files must be 300 MB or smaller. "${media}" is ${formatBytes(sizeBytes)}.`,
+    );
+  }
+
+  if (
+    selection.facebook &&
+    input.platformOverrides?.facebook?.mediaType === "VIDEO" &&
+    sizeBytes > LOCAL_VIDEO_FILE_SIZE_LIMITS_BYTES.facebookVideo
+  ) {
+    throw new ValidationError(
+      `Facebook normal page videos must be 10 GB or smaller. "${media}" is ${formatBytes(sizeBytes)}.`,
+    );
+  }
+}
+
+function validateLocalFileSizeForPlatform(
+  reference: string,
+  sizeBytes: number,
+  selection: Required<PlatformSelection>,
+  platform: PlatformName,
+): void {
+  const limit = LOCAL_PHOTO_FILE_SIZE_LIMITS_BYTES[platform];
+  if (!selection[platform] || limit === undefined || sizeBytes <= limit) {
+    return;
+  }
+
+  throw new ValidationError(
+    `${platformLabel(platform)} local image files must be ${formatBytes(limit)} or smaller. "${reference}" is ${formatBytes(sizeBytes)}.`,
+  );
+}
+
+function platformLabel(platform: PlatformName): string {
+  if (platform === "x") {
+    return "X";
+  }
+
+  if (platform === "instagram") {
+    return "Instagram";
+  }
+
+  return "Facebook";
 }
 
 export function validatePublishInput(
@@ -187,15 +281,21 @@ export function validatePublishInput(
         "Photos payloads must contain image files only. Mixed photo/video cross-posting is intentionally blocked in v1.",
       );
     }
+
+    validatePhotoCountLimits(media, selection);
+    validateLocalPhotoFileSizes(media, selection);
   }
 
   if (input.kind === "video") {
     if (media.length !== 1) {
       throw new ValidationError("Video payloads must contain exactly one media item.");
     }
+
     if (mediaKinds[0] !== "video") {
       throw new ValidationError("Video payloads must point to a video file or URL.");
     }
+
+    validateLocalVideoFileSize(media[0], selection, input);
   }
 
   return {

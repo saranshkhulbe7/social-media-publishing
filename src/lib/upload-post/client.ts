@@ -1,12 +1,14 @@
 import type {
   PublishProgressEvent,
   UploadPostStatusResponse,
-} from "../../domain/types.ts";
+} from "../../domain/types";
 
 type UploadPostFetch = (
   input: RequestInfo | URL,
   init?: RequestInit,
 ) => Promise<Response>;
+
+type ProgressReporter = ((event: PublishProgressEvent) => void) | undefined;
 
 export interface UploadPostClientOptions {
   apiKey: string;
@@ -18,8 +20,6 @@ export interface PollStatusOptions {
   intervalMs: number;
   timeoutMs: number;
 }
-
-type ProgressReporter = ((event: PublishProgressEvent) => void) | undefined;
 
 export class UploadPostApiError extends Error {
   override name = "UploadPostApiError";
@@ -67,11 +67,15 @@ export class UploadPostClient {
     requestId?: string,
     onProgress?: ProgressReporter,
   ): Promise<unknown> {
-    return this.request(path, {
-      method: "POST",
-      headers: this.buildHeaders(requestId),
-      body: formData,
-    }, onProgress);
+    return this.request(
+      path,
+      {
+        method: "POST",
+        headers: this.buildHeaders(requestId),
+        body: formData,
+      },
+      onProgress,
+    );
   }
 
   async getJson(
@@ -86,10 +90,14 @@ export class UploadPostClient {
       }
     }
 
-    return this.request(url.toString(), {
-      method: "GET",
-      headers: this.buildHeaders(),
-    }, onProgress);
+    return this.request(
+      url.toString(),
+      {
+        method: "GET",
+        headers: this.buildHeaders(),
+      },
+      onProgress,
+    );
   }
 
   async pollStatus(
@@ -107,9 +115,13 @@ export class UploadPostClient {
     });
 
     while (Date.now() - startedAt <= options.timeoutMs) {
-      const response = (await this.getJson("/uploadposts/status", {
-        request_id: requestId,
-      }, onProgress)) as UploadPostStatusResponse;
+      const response = (await this.getJson(
+        "/uploadposts/status",
+        {
+          request_id: requestId,
+        },
+        onProgress,
+      )) as UploadPostStatusResponse;
       lastResponse = response;
 
       this.emitProgress(onProgress, {
@@ -123,7 +135,7 @@ export class UploadPostClient {
         return response;
       }
 
-      await Bun.sleep(options.intervalMs);
+      await sleep(options.intervalMs);
     }
 
     throw new UploadPostPollingError(
@@ -210,4 +222,8 @@ export class UploadPostClient {
   ): void {
     onProgress?.(event);
   }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }

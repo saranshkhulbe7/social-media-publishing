@@ -78,14 +78,30 @@ export interface PublishError {
     | "validation_error"
     | "authentication_error"
     | "profile_not_found"
+    | "plan_restricted"
     | "monthly_limit_exceeded"
+    | "daily_platform_limit_exceeded"
     | "rate_limited"
+    | "service_unavailable"
+    | "account_reconnect_required"
+    | "account_not_linked"
+    | "account_permission_error"
+    | "account_restricted"
+    | "facebook_page_selection_required"
+    | "unsupported_content"
+    | "policy_violation"
     | "network_error"
     | "publish_timeout"
     | "api_error"
     | "unexpected_response"
     | "platform_publish_failed";
   message: string;
+  platform?: PlatformName;
+  retryable?: boolean;
+  suggestion?: string;
+  usage?: UploadPostUsage;
+  violations?: UploadPostViolation[];
+  availablePages?: Array<Record<string, unknown>>;
   details?: unknown;
 }
 
@@ -130,7 +146,7 @@ export interface UploadPostPlatformResponse {
 export interface UploadPostSyncResponse {
   success?: boolean;
   results?: Partial<Record<PlatformName, UploadPostPlatformResponse>>;
-  usage?: unknown;
+  usage?: UploadPostUsage;
   [key: string]: unknown;
 }
 
@@ -159,5 +175,21 @@ export interface UploadPostStatusResponse {
   total?: number;
   results?: UploadPostStatusEntry[];
   last_update?: string;
+  [key: string]: unknown;
+}
+
+export interface UploadPostUsage {
+  count?: number;
+  limit?: number;
+  last_reset?: string;
+  [key: string]: unknown;
+}
+
+export interface UploadPostViolation {
+  platform?: string;
+  type?: string;
+  message?: string;
+  used_last_24h?: number;
+  cap?: number;
   [key: string]: unknown;
 }
