@@ -6,6 +6,7 @@ export type {
   PlatformStatus,
   PublishError,
   PublishInput,
+  PublishLogger,
   PublishOptions,
   PublishProgressEvent,
   PublishResult,

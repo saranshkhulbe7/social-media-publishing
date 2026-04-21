@@ -26,8 +26,15 @@ export interface PublishProgressEvent {
   details?: unknown;
 }
 
+export interface PublishLogger {
+  log: (message: string) => void;
+}
+
 export interface PublishOptions {
   onProgress?: (event: PublishProgressEvent) => void;
+  showLogs?: boolean;
+  showSummary?: boolean;
+  logger?: PublishLogger;
 }
 
 export interface PlatformOverrides {

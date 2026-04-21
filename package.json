@@ -1,6 +1,6 @@
 {
   "name": "@saranshkhulbe/upload-post-publisher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript package for publishing to X, Instagram, and Facebook through Upload Post.",
   "type": "module",
   "main": "./dist/index.cjs",

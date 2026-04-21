@@ -106,6 +106,105 @@ describe("publisher service", () => {
     expect(result.overallStatus).toBe("success");
   });
 
+  test("prints only the compact summary when showLogs is false", async () => {
+    const messages: string[] = [];
+    const service = createPublisherService({
+      apiKey: "test-key",
+      baseUrl: "https://api.upload-post.com/api",
+      profile: "demo-profile",
+      pollIntervalMs: 1,
+      pollTimeoutMs: 100,
+      fetchImpl: async () =>
+        jsonResponse({
+          success: true,
+          results: {
+            x: {
+              success: true,
+              url: "https://x.com/example/status/2",
+            },
+            instagram: {
+              success: true,
+              url: "https://instagram.com/p/abc123",
+            },
+          },
+        }),
+    });
+
+    await service.publish(
+      {
+        kind: "photos",
+        caption: "Summary only",
+        media: ["https://example.com/photo-1.jpg"],
+      },
+      {
+        x: true,
+        instagram: true,
+      },
+      {
+        showLogs: false,
+        logger: {
+          log(message) {
+            messages.push(message);
+          },
+        },
+      },
+    );
+
+    expect(messages).toEqual([
+      "Publish summary: success",
+      "x: published",
+      "instagram: published",
+      "facebook: skipped",
+    ]);
+  });
+
+  test("prints progress logs and the compact summary when showLogs is true", async () => {
+    const messages: string[] = [];
+    const service = createPublisherService({
+      apiKey: "test-key",
+      baseUrl: "https://api.upload-post.com/api",
+      profile: "demo-profile",
+      pollIntervalMs: 1,
+      pollTimeoutMs: 100,
+      fetchImpl: async () =>
+        jsonResponse({
+          success: true,
+          results: {
+            x: {
+              success: true,
+              url: "https://x.com/example/status/2",
+            },
+          },
+        }),
+    });
+
+    await service.publish(
+      {
+        kind: "text",
+        caption: "Verbose logs",
+      },
+      {
+        x: true,
+      },
+      {
+        showLogs: true,
+        logger: {
+          log(message) {
+            messages.push(message);
+          },
+        },
+      },
+    );
+
+    expect(messages.some((message) => message.startsWith("[validation.started]"))).toBe(true);
+    expect(messages.slice(-4)).toEqual([
+      "Publish summary: success",
+      "x: published",
+      "instagram: skipped",
+      "facebook: skipped",
+    ]);
+  });
+
   test("publishes video asynchronously and polls to completion", async () => {
     const requests: Array<{ url: string; body?: FormData }> = [];
     let callCount = 0;

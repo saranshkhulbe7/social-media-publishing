@@ -60,13 +60,11 @@ const result = await publish(
     facebook: false,
   },
   {
-    onProgress(event) {
-      console.log(`[${event.stage}] ${event.message}`);
-    },
+    showLogs: false,
   },
 );
 
-console.log(JSON.stringify(result, null, 2));
+console.log(result);
 ```
 
 If the publish fails or is partial, inspect the normalized error codes:
@@ -90,6 +88,13 @@ The package exports:
 - `PublishOptions`
 - `PublishResult`
 - `PublishError`
+
+Useful publish options:
+
+- `showLogs`: prints detailed progress logs when `true`
+- `showSummary`: prints the compact end summary when `true` or omitted
+- `onProgress`: custom progress callback
+- `logger`: custom logger sink
 
 ## Platform Selection
 
@@ -244,6 +249,42 @@ if (result.platforms.facebook.error?.code === "facebook_page_selection_required"
 if (result.error?.code === "daily_platform_limit_exceeded") {
   console.log(result.error.violations);
 }
+```
+
+## Logging UX
+
+The package supports two layers of output:
+
+- Detailed progress logs with `showLogs: true`
+- A compact final summary, shown by default
+
+Example:
+
+```ts
+await publish(payload, {
+  x: true,
+  instagram: true,
+  facebook: false,
+}, {
+  showLogs: false,
+});
+```
+
+That keeps the output short, for example:
+
+```text
+Publish summary: success
+x: published
+instagram: published
+facebook: skipped
+```
+
+If you want the detailed polling logs as well:
+
+```ts
+await publish(payload, platforms, {
+  showLogs: true,
+});
 ```
 
 ## Package Structure

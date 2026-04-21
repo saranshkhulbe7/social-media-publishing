@@ -1,6 +1,7 @@
 import { loadEnv } from "../config/env";
 import type {
   PlatformName,
+  PublishLogger,
   PlatformResult,
   PlatformSelection,
   PublishError,
@@ -95,6 +96,76 @@ function emitProgress(
     details,
     requestId,
   });
+}
+
+function createSummaryLines(result: PublishResult): string[] {
+  return [
+    `Publish summary: ${result.overallStatus}`,
+    `x: ${formatPlatformSummary(result.platforms.x)}`,
+    `instagram: ${formatPlatformSummary(result.platforms.instagram)}`,
+    `facebook: ${formatPlatformSummary(result.platforms.facebook)}`,
+  ];
+}
+
+function formatPlatformSummary(result: PlatformResult): string {
+  if (result.status === "published") {
+    return "published";
+  }
+
+  if (result.status === "failed") {
+    const code = result.error?.code;
+    return code ? `failed (${code})` : "failed";
+  }
+
+  if (result.status === "skipped") {
+    if (result.reason === "not_requested") {
+      return "skipped";
+    }
+
+    return result.reason ? `skipped (${result.reason})` : "skipped";
+  }
+
+  return result.status;
+}
+
+function printPublishSummary(
+  logger: PublishLogger,
+  result: PublishResult,
+): void {
+  for (const line of createSummaryLines(result)) {
+    logger.log(line);
+  }
+}
+
+function createInternalProgressReporter(
+  showLogs: boolean,
+  logger: PublishLogger,
+): ProgressReporter {
+  if (!showLogs) {
+    return undefined;
+  }
+
+  return (event) => {
+    logger.log(`[${event.stage}] ${event.message}`);
+  };
+}
+
+function mergeProgressReporters(
+  first: ProgressReporter,
+  second: ProgressReporter,
+): ProgressReporter {
+  if (!first) {
+    return second;
+  }
+
+  if (!second) {
+    return first;
+  }
+
+  return (event) => {
+    first(event);
+    second(event);
+  };
 }
 
 function toPublishError(error: unknown): PublishError {
@@ -508,11 +579,17 @@ export function createPublisherService(dependencies: PublisherDependencies) {
       platformSelection: PlatformSelection = {},
       options: PublishOptions = {},
     ): Promise<PublishResult> {
-      emitProgress(options.onProgress, "validation.started", "Validating publish input.");
+      const logger = options.logger ?? console;
+      const progressReporter = mergeProgressReporters(
+        createInternalProgressReporter(options.showLogs ?? false, logger),
+        options.onProgress,
+      );
+
+      emitProgress(progressReporter, "validation.started", "Validating publish input.");
       try {
         const validatedInput = validatePublishInput(input, platformSelection);
         emitProgress(
-          options.onProgress,
+          progressReporter,
           "validation.completed",
           `Validation passed for ${validatedInput.kind} publish request.`,
           {
@@ -521,27 +598,39 @@ export function createPublisherService(dependencies: PublisherDependencies) {
             skippedPlatforms: validatedInput.skippedPlatforms,
           },
         );
-        return await executePublish(validatedInput, dependencies, options.onProgress);
+        const result = await executePublish(validatedInput, dependencies, progressReporter);
+        if (options.showSummary !== false) {
+          printPublishSummary(logger, result);
+        }
+        return result;
       } catch (error) {
         const normalizedError = toPublishError(error);
         emitProgress(
-          options.onProgress,
+          progressReporter,
           "publish.failed",
           `Publish failed: ${normalizedError.message}`,
           normalizedError,
         );
         try {
           const validatedInput = validatePublishInput(input, platformSelection);
-          return buildErrorResult(
+          const result = buildErrorResult(
             validatedInput.requestedPlatforms,
             normalizedError,
             validatedInput.skippedPlatforms,
           );
+          if (options.showSummary !== false) {
+            printPublishSummary(logger, result);
+          }
+          return result;
         } catch {
           const requestedPlatforms = selectedPlatformsFromSelection(
             resolvePlatformSelection(input.platforms, platformSelection),
           );
-          return buildErrorResult(requestedPlatforms, normalizedError);
+          const result = buildErrorResult(requestedPlatforms, normalizedError);
+          if (options.showSummary !== false) {
+            printPublishSummary(logger, result);
+          }
+          return result;
         }
       }
     },
