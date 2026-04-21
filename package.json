@@ -2,10 +2,15 @@
   "name": "social-media-posting",
   "module": "index.ts",
   "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
+  "scripts": {
+    "publish:script": "bun run src/scripts/publish.ts",
+    "publish": "bun run index.ts publish",
+    "status": "bun run index.ts status",
+    "check": "tsc --noEmit",
+    "test": "bun test"
   },
-  "peerDependencies": {
+  "devDependencies": {
+    "@types/bun": "latest",
     "typescript": "^5.0.0"
   }
 }
