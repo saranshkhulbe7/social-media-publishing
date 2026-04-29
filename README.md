@@ -1,360 +1,162 @@
-# @saranshkhulbe/upload-post-publisher
+# IT-01 and IT-02 Combined Flow Diagram
 
-Clean TypeScript package for publishing to X, Instagram, and Facebook through the Upload Post API.
+This diagram combines XPOLL platform delivery, deployment, ingress, and runtime flow into a single operational view.
 
-This package is built as a reusable npm library, not as a CLI. A consumer installs it, sets environment variables, and calls `publish()` with platform booleans such as `{ x: true, instagram: true, facebook: false }`.
+```mermaid
+flowchart TB
 
-## Install
+subgraph platform["XPOLL Platform Delivery, Deployment, and Runtime Flow"]
+  direction TB
 
-With npm:
+  subgraph source_release["Source Repositories and Release Control"]
+    direction LR
+    xpoll_server["xpoll-server"]
+    xpoll_user["xpoll-user"]
+    xpoll_admin["xpoll-admin"]
+    xpoll_landing["xpoll-landing-102025"]
+    xpoll_aptos["xpoll-aptos-transfer-service"]
+    dev_branch["dev branch<br/>(development publishes)"]
+    main_branch["main branch<br/>(production publishes)"]
+    gha["GitHub Actions<br/>publish workflows"]
+    trigger_deploy["Trigger.dev<br/>deploy commands"]
 
-```bash
-npm install @saranshkhulbe/upload-post-publisher
+    xpoll_server --> dev_branch
+    xpoll_server --> main_branch
+    xpoll_user --> dev_branch
+    xpoll_user --> main_branch
+    xpoll_admin --> dev_branch
+    xpoll_admin --> main_branch
+    xpoll_aptos --> dev_branch
+    xpoll_aptos --> main_branch
+    xpoll_landing --> main_branch
+
+    dev_branch --> gha
+    main_branch --> gha
+    xpoll_server --> trigger_deploy
+  end
+
+  subgraph image_rollout["Image Publication and Cluster Rollout"]
+    direction LR
+    registry["DigitalOcean<br/>Container Registry"]
+    latest_tags["latest<br/>image tags"]
+    rollout["doctl and kubectl<br/>rollout restart"]
+    do_cluster["DigitalOcean<br/>Kubernetes cluster"]
+    xpoll_ns["xpoll namespace"]
+
+    gha --> registry --> latest_tags --> rollout --> do_cluster --> xpoll_ns
+  end
+
+  subgraph routing["Ingress, TLS, and Public Access"]
+    direction LR
+    domain_root["xpoll.io<br/>www.xpoll.io"]
+    domain_app["app.xpoll.io<br/>app-dev.xpoll.io"]
+    domain_admin["admin.xpoll.io<br/>admin-dev.xpoll.io"]
+    domain_api["api.xpoll.io<br/>api-dev.xpoll.io"]
+    domain_aptos["api-aptos-transfer-prod.xpoll.io<br/>api-aptos-transfer-dev.xpoll.io"]
+    tls["Wildcard TLS<br/>certificates"]
+    ingress["NGINX Ingress"]
+
+    domain_root --> ingress
+    domain_app --> ingress
+    domain_admin --> ingress
+    domain_api --> ingress
+    domain_aptos --> ingress
+    tls --> ingress
+  end
+
+  subgraph runtime["XPOLL Runtime Workloads"]
+    direction TB
+
+    subgraph public_group["Public workloads"]
+      direction LR
+      public_anchor[" "]
+      landing_site["Landing site<br/>xpoll-landing-102025"]
+      user_frontend["User frontend<br/>xpoll-user-development /<br/>xpoll-user-production"]
+      admin_frontend["Admin frontend<br/>xpoll-admin-development /<br/>xpoll-admin-production"]
+      api_server["XPOLL API server<br/>xpoll-server-dev /<br/>xpoll-server-prod"]
+      aptos_api["Aptos transfer API<br/>xpoll-aptos-transfer-server-dev /<br/>xpoll-aptos-transfer-server-prod"]
+
+      public_anchor --> landing_site
+      public_anchor --> user_frontend
+      public_anchor --> admin_frontend
+      public_anchor --> api_server
+      public_anchor --> aptos_api
+    end
+
+    subgraph internal_group["Internal workloads"]
+      direction LR
+      internal_anchor[" "]
+      worker["XPOLL queue worker<br/>xpoll-worker-dev /<br/>xpoll-worker-prod"]
+      evm_listener["EVM listener<br/>xpoll-evm-listener-dev /<br/>xpoll-evm-listener-main"]
+      strain_listener["Strain listener<br/>xpoll-strain-listener-dev /<br/>xpoll-strain-listener-main"]
+      aptos_worker["Aptos transfer worker<br/>xpoll-aptos-transfer-worker-dev /<br/>xpoll-aptos-transfer-worker-prod"]
+
+      internal_anchor --> worker
+      internal_anchor --> evm_listener
+      internal_anchor --> strain_listener
+      internal_anchor --> aptos_worker
+    end
+
+    subgraph task_group["Task runtime"]
+      direction LR
+      trigger_runtime["Trigger.dev runtime"]
+    end
+
+    subgraph data_group["Data and support services"]
+      direction LR
+      mongo["MongoDB"]
+      redis["Redis"]
+    end
+  end
+
+  xpoll_ns --> public_anchor
+  xpoll_ns --> internal_anchor
+  xpoll_ns --> trigger_runtime
+
+  ingress --> landing_site
+  ingress --> user_frontend
+  ingress --> admin_frontend
+  ingress --> api_server
+  ingress --> aptos_api
+
+  api_server --> mongo
+  mongo --> api_server
+  api_server --> redis
+  redis --> worker
+  trigger_runtime --> api_server
+
+  trigger_deploy --> trigger_runtime
+
+  latest_tags -.-> evm_note["production publish<br/>without automatic<br/>rollout restart"]
+  evm_note -.-> evm_listener
+end
+
+classDef source fill:#dbeafe,stroke:#1d4ed8,color:#0f172a,stroke-width:1.5px;
+classDef release fill:#e2e8f0,stroke:#475569,color:#0f172a,stroke-width:1.5px;
+classDef infra fill:#f3f4f6,stroke:#6b7280,color:#111827,stroke-width:1.5px;
+classDef ingress_style fill:#ccfbf1,stroke:#0f766e,color:#0f172a,stroke-width:1.5px;
+classDef public fill:#dcfce7,stroke:#15803d,color:#0f172a,stroke-width:1.5px;
+classDef internal fill:#fef3c7,stroke:#b45309,color:#0f172a,stroke-width:1.5px;
+classDef data fill:#e5e7eb,stroke:#4b5563,color:#111827,stroke-width:1.5px;
+classDef note fill:#ffe4e6,stroke:#be123c,color:#881337,stroke-width:1.5px,stroke-dasharray: 4 2;
+classDef ghost fill:transparent,stroke:transparent,color:transparent;
+
+class xpoll_server,xpoll_user,xpoll_admin,xpoll_landing,xpoll_aptos,dev_branch,main_branch source;
+class gha,trigger_deploy,registry,latest_tags,rollout release;
+class do_cluster,xpoll_ns infra;
+class domain_root,domain_app,domain_admin,domain_api,domain_aptos,tls,ingress ingress_style;
+class landing_site,user_frontend,admin_frontend,api_server,aptos_api public;
+class worker,evm_listener,strain_listener,aptos_worker,trigger_runtime internal;
+class mongo,redis data;
+class evm_note note;
+class public_anchor,internal_anchor ghost;
 ```
 
-With Bun:
-
-```bash
-bun add @saranshkhulbe/upload-post-publisher
-```
-
-## Quick Start
-
-Set these environment variables:
-
-```bash
-export UPLOAD_POST_API_KEY="your-upload-post-api-key"
-export UPLOAD_POST_PROFILE="your-upload-post-profile"
-```
-
-Optional environment variables:
-
-```bash
-export UPLOAD_POST_BASE_URL="https://api.upload-post.com/api"
-export UPLOAD_POST_POLL_INTERVAL_MS="1000"
-export UPLOAD_POST_POLL_TIMEOUT_MS="60000"
-```
-
-Create a script like this:
-
-```ts
-import { publish } from "@saranshkhulbe/upload-post-publisher";
-
-const result = await publish(
-  {
-    kind: "photos",
-    caption: "New product shots are live.",
-    media: [
-      "https://example.com/photo-1.jpg",
-      "https://example.com/photo-2.jpg",
-    ],
-    platformOverrides: {
-      facebook: {
-        pageId: "your-facebook-page-id",
-      },
-    },
-  },
-  {
-    x: true,
-    instagram: true,
-    facebook: false,
-  },
-  {
-    showLogs: false,
-  },
-);
-
-console.log(result);
-```
-
-If the publish fails or is partial, inspect the normalized error codes:
-
-```ts
-if (result.overallStatus !== "success") {
-  console.error(result.error);
-  console.error(result.platforms.instagram.error);
-}
-```
-
-## Public API
-
-The package exports:
-
-- `publish(input, platformSelection?, options?)`
-- `createPublisherService(dependencies)`
-- `getPublishStatus(requestId)`
-- `PublishInput`
-- `PlatformSelection`
-- `PublishOptions`
-- `PublishResult`
-- `PublishError`
-
-Useful publish options:
-
-- `showLogs`: prints detailed progress logs when `true`
-- `showSummary`: prints the compact end summary when `true` or omitted
-- `onProgress`: custom progress callback
-- `logger`: custom logger sink
-
-## Platform Selection
-
-All platform flags default to `false`.
-
-```ts
-{
-  x: true,
-  instagram: false,
-  facebook: true,
-}
-```
-
-That means nothing is published unless the caller explicitly opts in.
-
-## Input Shapes
-
-Text:
-
-```ts
-{
-  kind: "text",
-  caption: "Shipping an update today.",
-}
-```
-
-Photos:
-
-```ts
-{
-  kind: "photos",
-  caption: "Gallery post",
-  media: ["./photo-1.jpg", "./photo-2.jpg"],
-}
-```
-
-Video:
-
-```ts
-{
-  kind: "video",
-  caption: "Watch the launch reel.",
-  media: "./launch-reel.mp4",
-}
-```
-
-Local file paths and public URLs are both supported.
-
-## `createPublisherService()` Example
-
-Use this if you want to inject credentials directly instead of reading from `process.env`:
-
-```ts
-import { createPublisherService } from "@saranshkhulbe/upload-post-publisher";
-
-const publisher = createPublisherService({
-  apiKey: process.env.UPLOAD_POST_API_KEY!,
-  profile: process.env.UPLOAD_POST_PROFILE!,
-  baseUrl: "https://api.upload-post.com/api",
-});
-
-const result = await publisher.publish(
-  {
-    kind: "text",
-    caption: "Shipping an update today.",
-    platformOverrides: {
-      facebook: {
-        pageId: "your-facebook-page-id",
-        linkUrl: "https://example.com/article",
-      },
-    },
-  },
-  {
-    x: true,
-    instagram: false,
-    facebook: true,
-  },
-);
-
-console.log(result);
-```
-
-## Behavior Notes
-
-- Instagram text-only publishing is not supported in this package. If Instagram is requested for a text payload, it is returned as skipped with `instagram_text_only_not_supported`.
-- Facebook publishing is for connected Facebook Pages, not personal profiles.
-- If your Upload Post profile has multiple connected Facebook Pages, set `platformOverrides.facebook.pageId`.
-- Photo payloads accept image files only.
-- Video payloads accept exactly one video.
-- Mixed photo and video cross-post payloads are intentionally rejected before any API call.
-
-## Preflight Limits
-
-This package validates a few important limits locally before it sends the request:
-
-- If `x: true` on a photo post, the package allows up to 4 images.
-- If `instagram: true` on a photo post, the package allows up to 10 images.
-- For local image files, the package checks these size limits before upload:
-  - X: 5 MB per image
-  - Instagram: 8 MB per image
-  - Facebook: 10 MB per image
-- For local Instagram videos, the package checks 300 MB maximum.
-- For local Facebook `VIDEO` uploads, the package checks 10 GB maximum.
-
-Remote URLs are still accepted, but file size validation for URLs is left to Upload Post because the package cannot reliably inspect remote assets ahead of time.
-
-## Graceful Error Handling
-
-Errors are normalized into a stable `PublishError` shape so your app does not need to parse Upload Post messages directly.
-
-Common normalized error codes include:
-
-- `authentication_error`
-- `profile_not_found`
-- `plan_restricted`
-- `monthly_limit_exceeded`
-- `daily_platform_limit_exceeded`
-- `rate_limited`
-- `service_unavailable`
-- `account_reconnect_required`
-- `account_not_linked`
-- `account_permission_error`
-- `account_restricted`
-- `facebook_page_selection_required`
-- `unsupported_content`
-- `policy_violation`
-- `validation_error`
-- `publish_timeout`
-
-Each normalized error can also include:
-
-- `retryable`
-- `suggestion`
-- `platform`
-- `usage`
-- `violations`
-- `availablePages`
-
-Example:
-
-```ts
-const result = await publish(payload, {
-  x: true,
-  instagram: true,
-  facebook: true,
-});
-
-if (result.platforms.facebook.error?.code === "facebook_page_selection_required") {
-  console.log(result.platforms.facebook.error.availablePages);
-}
-
-if (result.error?.code === "daily_platform_limit_exceeded") {
-  console.log(result.error.violations);
-}
-```
-
-## Logging UX
-
-The package supports two layers of output:
-
-- Detailed progress logs with `showLogs: true`
-- A compact final summary, shown by default
-
-Example:
-
-```ts
-await publish(payload, {
-  x: true,
-  instagram: true,
-  facebook: false,
-}, {
-  showLogs: false,
-});
-```
-
-That keeps the output short, for example:
-
-```text
-Publish summary: success
-x: published
-instagram: published
-facebook: skipped
-```
-
-If you want the detailed polling logs as well:
-
-```ts
-await publish(payload, platforms, {
-  showLogs: true,
-});
-```
-
-## Package Structure
-
-The repo is organized as a library-first package:
-
-- `src/index.ts`: public package entrypoint
-- `src/config/`: environment loading
-- `src/domain/`: public types and validation
-- `src/lib/upload-post/`: low-level Upload Post HTTP client and endpoint wrappers
-- `src/services/`: publish orchestration
-- `examples/`: non-published usage examples
-- `tests/`: validation and publisher tests
-
-Only the built `dist/` output, `README.md`, and `LICENSE` are included in the published tarball.
-
-## Local Development
-
-Install dependencies:
-
-```bash
-bun install
-```
-
-Type-check:
-
-```bash
-bun run check
-```
-
-Run tests:
-
-```bash
-bun test
-```
-
-Build:
-
-```bash
-bun run build
-```
-
-Inspect the tarball:
-
-```bash
-bun run pack:check
-```
-
-## Publish Commands
-
-According to npm's docs for scoped public packages, publish with `--access public`:
-
-- [Creating and publishing scoped public packages](https://docs.npmjs.com/creating-and-publishing-scoped-public-packages/)
-- [About scopes](https://docs.npmjs.com/about-scopes/)
-- [bun add](https://bun.sh/docs/cli/add)
-
-Use these commands from the package root:
-
-```bash
-npm login
-npm whoami
-bun run check
-bun test
-bun run build
-bun run pack:check
-npm publish --access public
-```
-
-After publishing, verify:
-
-```bash
-npm view @saranshkhulbe/upload-post-publisher version
-```
+## Reading Notes
+
+- `dev` drives development publishes and `main` drives production publishes.
+- Most workload releases publish an image and restart the matching deployment in the `xpoll` namespace.
+- Trigger.dev task deployment is separate from Kubernetes image rollout.
+- Only public applications and APIs are exposed through `NGINX Ingress`.
+- Workers and listeners are internal-only workloads.
+- The production EVM listener publish path does not include an automatic rollout restart.
